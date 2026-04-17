@@ -19,7 +19,7 @@ VDBBench 是 Zilliz 开源的向量数据库 Benchmark 工具，内置支持 Mil
 
 ### 适用场景
 
-- 对自建 Elasticsearch 8.x 做向量检索性能评测
+- 对自建 Elasticsearch 8.x & 9.x 做向量检索性能评测
 - 对比不同 HNSW 索引类型（float / int8 / int4 / bbq）的性能差异
 - 对比不同参数（M / ef_construction / num_candidates）下的 Recall-QPS 表现
 - 评估不同并发档位下的 QPS 和尾延迟

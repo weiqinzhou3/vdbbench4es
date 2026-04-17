@@ -1,0 +1,10 @@
+vectordb-bench[elastic]
+elasticsearch
+polars
+pandas
+pyarrow
+numpy
+pydantic<2.0.0
+ujson
+psutil
+python-dotenv

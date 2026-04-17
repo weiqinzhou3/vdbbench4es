@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environment
+.venv/
+venv/
+ENV/
+
+# Environment variables (contains credentials)
+.env
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Runtime outputs
+logs/
+outputs/
+*.log
+
+# Temporary files
+*.tmp
+*.bak
+*.orig
+
+# Claude Code
+.claude/

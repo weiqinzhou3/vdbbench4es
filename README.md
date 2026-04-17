@@ -19,14 +19,14 @@ VDBBench 是 Zilliz 开源的向量数据库 Benchmark 工具，内置支持 Mil
 
 ### 适用场景
 
-- 对自建 Elasticsearch 8.x & 9.x 做向量检索性能评测
+- 对自建 Elasticsearch 8.x / 9.x 做向量检索性能评测
 - 对比不同 HNSW 索引类型（float / int8 / int4 / bbq）的性能差异
 - 对比不同参数（M / ef_construction / num_candidates）下的 Recall-QPS 表现
 - 评估不同并发档位下的 QPS 和尾延迟
 
 ### 不适用场景
 
-- Elasticsearch 7.x 或更早版本（未测试）
+- Elasticsearch 7.x 或更早版本（不在当前支持范围内）
 - 混合查询（向量 + 全文 + 标量过滤的复合业务检索）
 - 写入性能评测（VDBBench 侧重搜索评测）
 - 需要自定义 ES DSL 的高级查询场景
@@ -40,13 +40,14 @@ VDBBench 是 Zilliz 开源的向量数据库 Benchmark 工具，内置支持 Mil
 - **参数调优**：支持 M、ef-construction、num-candidates、k、并发数等单变量对比
 - **内置数据集**：可直接下载 VDBBench 内置的 OpenAI 1536d / Cohere 768d 等标准数据集
 - **Smoke 数据集**：自带小规模随机数据集，用于快速验证链路连通性
+- **自定义索引名**：通过 `ES_INDEX_NAME` 在同一 ES 中并存多组 benchmark 索引，避免互相覆盖
 - **Load/Search 解耦**：支持先只做数据加载，再只做搜索测试
 
 ### 已验证可用的能力
 
 | 能力 | 状态 |
 |------|------|
-| ES 8.x 连接与认证 | 已验证 |
+| ES 8.x / 9.x 连接与认证 | 已验证（8.x）；9.x 代码层面兼容，未做专项回归 |
 | 小规模 Smoke 数据集全链路 | 已验证 |
 | OpenAI 1536d 500K 写入 + 搜索 | 已验证 |
 | HNSW float32 索引类型 | 已验证 |
@@ -86,7 +87,7 @@ vdbbench4es/
 ### 前提条件
 
 - **Python**: 3.11 或更高版本（VDBBench 1.0.20 要求）
-- **Elasticsearch**: 8.x（已部署并可访问）
+- **Elasticsearch**: 8.x 或 9.x（已部署并可访问）
 - **操作系统**: Linux / macOS（Windows 未测试）
 - **磁盘空间**: Smoke 测试 < 100MB；500K 数据集约 5GB；5M/10M 数据集约 60GB+
 
@@ -118,11 +119,9 @@ pip install -r requirements.txt
 - `polars` / `pandas` / `pyarrow` / `numpy` — 数据处理
 - `python-dotenv` — 环境变量加载
 
-> **注意**：如果你的 ES 版本是 8.x，但 pip 安装了 `elasticsearch` 9.x 客户端，可能会出现握手报错。此时请降级：
-> ```bash
-> pip install 'elasticsearch>=8.0,<9.0'
-> ```
-> 或者确保 `.env` 中设置了 `ES_COMPAT_VERSION=8`（本项目的 patch 会自动处理兼容头）。
+> **注意**：如果 `elasticsearch-py` 客户端大版本（如 9.x）高于 ES 服务端（如 8.x），可能出现握手报错。
+> 推荐在 `.env` 中设置 `ES_COMPAT_VERSION=8`，本项目的 Patch A 会自动注入兼容头来解决此问题。
+> 如果客户端与服务端版本一致（都是 8.x 或都是 9.x），则无需设置。
 
 ### 步骤 4：配置 Elasticsearch 连接
 
@@ -137,7 +136,15 @@ ES_HOSTS=http://your-es-host:9200
 ES_USER=elastic
 ES_PASSWORD=your_password_here
 ES_VERIFY_CERTS=false
+
+# 如果客户端版本高于服务端（如 9.x client → 8.x server），设置此项
 ES_COMPAT_VERSION=8
+
+# 可选：自定义数据集存储目录（默认 /tmp/vectordb_bench/dataset）
+# VDB_DATASET_DIR=/data/vdbbench_data
+
+# 可选：自定义索引名，避免多组测试互相覆盖（默认 vdb_bench_indice）
+# ES_INDEX_NAME=bench_openai_500k
 ```
 
 ### 步骤 5：验证连接
@@ -198,9 +205,9 @@ python3 scripts/vdb_es_cli.py elasticcloudhnsw \
 | `ES_USER` | 认证用户名 | `elastic` |
 | `ES_PASSWORD` | 认证密码 | `your_password` |
 | `ES_VERIFY_CERTS` | 是否验证 TLS 证书 | `false` |
-| `ES_COMPAT_VERSION` | 兼容版本号（解决握手报错） | `8` |
-| `VDB_DATASET_DIR` | 数据集存储目录 | `/data/vdbbench_data` |
-| `ES_INDEX_NAME` | 自定义索引名（可选） | `my_bench_index` |
+| `ES_COMPAT_VERSION` | 客户端→服务端兼容版本号；9.x client 连 8.x server 时设为 `8`，版本一致时留空 | `8` |
+| `VDB_DATASET_DIR` | 数据集落盘目录（可选），默认 `/tmp/vectordb_bench/dataset` | `/data/vdbbench_data` |
+| `ES_INDEX_NAME` | 自定义索引名（可选），默认 `vdb_bench_indice`；详见下方[自定义索引名](#自定义索引名es_index_name)一节 | `bench_openai_500k` |
 
 ### 索引类型子命令
 
@@ -210,6 +217,29 @@ python3 scripts/vdb_es_cli.py elasticcloudhnsw \
 | `elasticcloudhnswint8` | HNSW int8 | 8-bit 量化 |
 | `elasticcloudhnswint4` | HNSW int4 | 4-bit 量化 |
 | `elasticcloudhnswbbq` | HNSW BBQ | Binary Quantization |
+
+### 自定义索引名（ES_INDEX_NAME）
+
+默认情况下，VDBBench 将所有数据写入固定的索引 `vdb_bench_indice`。这意味着每次新测试都会覆盖上一次的数据，无法在同一套 ES 中保留多组实验结果。
+
+本项目通过 Patch D 支持 `ES_INDEX_NAME` 环境变量，让你可以为每轮测试指定独立的索引名称。
+
+**核心价值：**
+1. **保留历史索引** — 不同轮次的测试数据可以共存，方便事后对比
+2. **多 case 并行** — 在同一 ES 集群中同时保留 OpenAI 500K、Cohere 10M 等不同数据集的索引
+3. **调优友好** — 对比不同参数时，可以为每组参数创建独立索引，避免反复重建
+
+**使用方式：** 在 `.env` 中设置（或在命令行中 `export`）：
+
+```bash
+# 示例：为 OpenAI 500K 测试指定索引名
+ES_INDEX_NAME=bench_openai_500k
+
+# 示例：为 Cohere 10M 测试指定另一个索引名
+ES_INDEX_NAME=bench_cohere_10m
+```
+
+设置后，`drop_old`、`load`、`search` 等所有操作都会作用于该索引名。不设置则回退到默认的 `vdb_bench_indice`。
 
 ### 常用操作
 
@@ -288,10 +318,12 @@ curl -u elastic:your_password http://your-es-host:9200
 
 ### 3. 报错 `Accept found 9` 或版本握手失败
 
-这是 `elasticsearch-py` 客户端版本与 ES 服务端版本不匹配导致的。两种解决方式：
+这是 `elasticsearch-py` 客户端大版本高于 ES 服务端导致的（如 9.x client → 8.x server）。
 
-- **方式 A**：在 `.env` 中设置 `ES_COMPAT_VERSION=8`（推荐，patch 会自动加兼容头）
-- **方式 B**：降级客户端 `pip install 'elasticsearch>=8.0,<9.0'`
+- **推荐**：在 `.env` 中设置 `ES_COMPAT_VERSION=8`，Patch A 会自动注入兼容头
+- **备选**：降级客户端 `pip install 'elasticsearch>=8.0,<9.0'`
+
+如果客户端和服务端版本一致（都是 8.x 或都是 9.x），则不需要设置 `ES_COMPAT_VERSION`。
 
 ### 4. Monkey-patch 没生效 / 仍然要求 `cloud-id`
 
@@ -326,7 +358,7 @@ VDBBench 内置数据集存放在 S3 / AliyunOSS。如果在国内网络环境�
 
 ## 当前限制
 
-1. **仅支持 ES 8.x**：未在 7.x 或更早版本测试
+1. **面向 ES 8.x / 9.x**：7.x 及更早版本不在支持范围内
 2. **依赖 VDBBench 1.0.20**：不同版本的 VDBBench 内部 API 可能变化，patch 可能需要调整
 3. **过滤搜索和 Streaming 未充分验证**：这两类 case 在当前 patch 链路下仅条件性可用
 4. **不支持混合查询**：VDBBench 核心逻辑是纯向量搜索，不支持 keyword + vector + filter 的复合查询
@@ -369,7 +401,7 @@ bash scripts/run_vdbbench_smoke.sh
 | Patch A | `Elasticsearch.__init__` | 注入 `Accept` 兼容头，解决版本握手 |
 | Patch B | `ElasticCloudConfig.to_dict` | 替换 cloud-id 连接为 host + basic_auth |
 | Patch C | `config.DATASET_LOCAL_DIR` | 允许自定义数据集存储目录 |
-| Patch D | `ElasticCloud.__init__` | 允许自定义 ES 索引名称 |
+| Patch D | `ElasticCloud.__init__` | 注入自定义索引名（`ES_INDEX_NAME`），确保 drop/create/search 均作用于指定索引 |
 
 所有 patch 都是**运行时覆盖**，不修改 VDBBench 安装包的任何文件。
 

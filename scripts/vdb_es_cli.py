@@ -52,14 +52,16 @@ except ImportError:
     pass
 
 # 补丁 D: 允许自定义 ES 索引名称
+# 必须在 original __init__ 调用之前注入 indice 参数，
+# 否则 drop_old 逻辑仍会操作默认索引名 "vdb_bench_indice"。
 try:
     from vectordb_bench.backend.clients.elastic_cloud.elastic_cloud import ElasticCloud
     custom_index_name = os.getenv("ES_INDEX_NAME")
     if custom_index_name:
         original_ec_init = ElasticCloud.__init__
         def new_ec_init(self, *args, **kwargs):
+            kwargs.setdefault("indice", custom_index_name)
             original_ec_init(self, *args, **kwargs)
-            self.indice = custom_index_name
         ElasticCloud.__init__ = new_ec_init
 except ImportError:
     pass

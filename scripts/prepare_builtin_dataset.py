@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import sys
 import time
@@ -6,9 +8,13 @@ from pathlib import Path
 
 # Ensure project root is discoverable
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-from vectordb_bench.backend.dataset import DatasetWithSizeType
-from vectordb_bench.backend.data_source import DatasetSource
+from scripts.builtin_dataset_dependencies import (
+    BuiltinDatasetDependencyError,
+    ensure_builtin_dataset_dependencies,
+)
 from dotenv import load_dotenv
 
 # 加载 .env
@@ -63,6 +69,20 @@ def prepare_and_inspect(dataset_type: DatasetWithSizeType):
 
 if __name__ == "__main__":
     load_dotenv()
+    try:
+        ensure_builtin_dataset_dependencies()
+        from vectordb_bench.backend.dataset import DatasetWithSizeType
+        from vectordb_bench.backend.data_source import DatasetSource
+    except BuiltinDatasetDependencyError as e:
+        logger.error(str(e))
+        sys.exit(2)
+    except ImportError as e:
+        logger.error(
+            "Failed to import VDBBench builtin dataset modules: %s. "
+            "Install dependencies with: python3 -m pip install -r requirements.txt",
+            e,
+        )
+        sys.exit(2)
     
     # 优先从命令行获取，如果没有则从环境变量获取，最后给一个默认值
     if len(sys.argv) > 1:

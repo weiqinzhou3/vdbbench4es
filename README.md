@@ -118,10 +118,17 @@ pip install -r requirements.txt
 - `elasticsearch` — ES Python 客户端
 - `polars` / `pandas` / `pyarrow` / `numpy` — 数据处理
 - `python-dotenv` — 环境变量加载
+- `oss2` / `aliyun-python-sdk-core` / `cryptography` / `cffi` — 下载 VDBBench 内置数据集时需要的 AliyunOSS 与加密依赖
 
 > **注意**：如果 `elasticsearch-py` 客户端大版本（如 9.x）高于 ES 服务端（如 8.x），可能出现握手报错。
 > 推荐在 `.env` 中设置 `ES_COMPAT_VERSION=8`，本项目的 Patch A 会自动注入兼容头来解决此问题。
 > 如果客户端与服务端版本一致（都是 8.x 或都是 9.x），则无需设置。
+
+如果你是从旧版本仓库升级，建议在原虚拟环境中重新执行：
+
+```bash
+python3 -m pip install --upgrade -r requirements.txt
+```
 
 ### 步骤 4：配置 Elasticsearch 连接
 
@@ -136,6 +143,13 @@ ES_HOSTS=http://your-es-host:9200
 ES_USER=elastic
 ES_PASSWORD=your_password_here
 ES_VERIFY_CERTS=false
+
+# ES_VERIFY_CERTS=false 时默认抑制 InsecureRequestWarning。
+# 如需显式显示 warning，设为 true；如需显式关闭 warning，设为 false。
+# ES_SSL_SHOW_WARN=false
+
+# 兼容旧式命名：true 等价于 ES_SSL_SHOW_WARN=false。
+# ES_SUPPRESS_INSECURE_WARNING=true
 
 # 如果客户端版本高于服务端（如 9.x client → 8.x server），设置此项
 ES_COMPAT_VERSION=8
@@ -195,6 +209,20 @@ python3 scripts/vdb_es_cli.py elasticcloudhnsw \
 
 > **关于 `--cloud-id x --password x`**：这两个参数是占位符，仅用于通过 VDBBench CLI 的必填参数校验。真实的 ES 连接凭证来自 `.env` 文件，不是这里的 `x`。
 
+### 内置数据集下载前提
+
+`scripts/prepare_builtin_dataset.py` 默认使用 AliyunOSS 下载 VDBBench 内置数据集。请先确认已在当前虚拟环境安装完整依赖：
+
+```bash
+python3 -m pip install -r requirements.txt
+```
+
+其中 `oss2`、`aliyun-python-sdk-core`、`cryptography`、`cffi` 是下载链路需要的依赖。`No module named '_cffi_backend'` 通常表示当前虚拟环境中的 `cffi` 未安装或安装损坏，可执行：
+
+```bash
+python3 -m pip install --force-reinstall cffi
+```
+
 ## Elasticsearch 使用说明
 
 ### 连接参数
@@ -205,9 +233,36 @@ python3 scripts/vdb_es_cli.py elasticcloudhnsw \
 | `ES_USER` | 认证用户名 | `elastic` |
 | `ES_PASSWORD` | 认证密码 | `your_password` |
 | `ES_VERIFY_CERTS` | 是否验证 TLS 证书 | `false` |
+| `ES_SSL_SHOW_WARN` | 是否显示 `verify_certs=false` 时的 SSL warning；未设置时默认跟随 `ES_VERIFY_CERTS`，即 `false` 会抑制 warning、`true` 会保留正常安全行为 | `false` |
+| `ES_SUPPRESS_INSECURE_WARNING` | 兼容式开关；`true` 等价于 `ES_SSL_SHOW_WARN=false`，优先推荐使用 `ES_SSL_SHOW_WARN` | `true` |
 | `ES_COMPAT_VERSION` | 客户端→服务端兼容版本号；9.x client 连 8.x server 时设为 `8`，版本一致时留空 | `8` |
 | `VDB_DATASET_DIR` | 数据集落盘目录（可选），默认 `/tmp/vectordb_bench/dataset` | `/data/vdbbench_data` |
 | `ES_INDEX_NAME` | 自定义索引名（可选），默认 `vdb_bench_indice`；详见下方[自定义索引名](#自定义索引名es_index_name)一节 | `bench_openai_500k` |
+
+### HTTPS / SSL / 自签名证书
+
+推荐的安全配置是为 ES 配置可信证书或私有 CA，并设置：
+
+```bash
+ES_HOSTS=https://your-es-host:9200
+ES_VERIFY_CERTS=true
+```
+
+如果只是测试环境，或你明确接受证书不校验的风险，可以使用：
+
+```bash
+ES_HOSTS=https://your-es-host:9200
+ES_VERIFY_CERTS=false
+ES_SSL_SHOW_WARN=false
+```
+
+当 `ES_VERIFY_CERTS=false` 时，本项目会向 Elasticsearch 客户端传入 `ssl_show_warn=false`，并抑制 urllib3 的 `InsecureRequestWarning`。这只是**关闭 warning**，不等于启用了证书校验，也不会让连接变安全。生产或安全敏感环境应使用 `ES_VERIFY_CERTS=true`。
+
+如果你希望在 `verify_certs=false` 时仍然看到 warning，用于排查或审计：
+
+```bash
+ES_SSL_SHOW_WARN=true
+```
 
 ### 索引类型子命令
 
@@ -329,19 +384,72 @@ curl -u elastic:your_password http://your-es-host:9200
 
 确保你使用的是 `scripts/vdb_es_cli.py` 作为入口，而不是直接运行 `vectordbbench` 命令。Patch 逻辑在 `vdb_es_cli.py` 的 import 阶段执行。
 
-### 5. 数据集下载失败 / 速度极慢
+### 5. 连接 HTTPS ES 时出现 `InsecureRequestWarning`
+
+这是 HTTPS + `ES_VERIFY_CERTS=false` 场景下的安全提醒。默认情况下，本项目在 `verify_certs=false` 时会抑制该 warning，避免测试日志被刷屏。
+
+如果仍然看到 warning，请确认你使用的是本项目入口脚本：
+
+```bash
+python3 scripts/check_es_connection.py
+python3 scripts/vdb_es_cli.py ...
+python3 scripts/verify_builtin_ingestion.py
+```
+
+并确认 `.env` 中没有显式设置：
+
+```bash
+ES_SSL_SHOW_WARN=true
+```
+
+如需显式关闭：
+
+```bash
+ES_SSL_SHOW_WARN=false
+```
+
+安全建议仍然是配置可信证书或 CA，并设置 `ES_VERIFY_CERTS=true`。
+
+### 6. 报错 `No module named '_cffi_backend'`
+
+这是内置数据集下载链路中的加密依赖问题。`prepare_builtin_dataset.py` 会通过 `AliyunOSS` 读取数据，依赖链包含：
+
+```text
+oss2 -> aliyun-python-sdk-core -> cryptography -> cffi/_cffi_backend
+```
+
+请在当前虚拟环境中重新安装完整依赖：
+
+```bash
+python3 -m pip install --upgrade -r requirements.txt
+```
+
+如果仍然报 `_cffi_backend` 缺失，通常是 `cffi` 安装损坏或虚拟环境不一致，执行：
+
+```bash
+python3 -m pip install --force-reinstall cffi cryptography
+```
+
+确认使用的是同一个 Python：
+
+```bash
+which python3
+python3 -m pip --version
+```
+
+### 7. 数据集下载失败 / 速度极慢
 
 VDBBench 内置数据集存放在 S3 / AliyunOSS。如果在国内网络环境下：
 - `prepare_builtin_dataset.py` 默认使用 AliyunOSS 镜像，速度较快
 - 如果完全离线，可在有网的机器上先 `prepare`，再将数据目录打包搬运，并在目标机器上通过 `VDB_DATASET_DIR` 指定路径
 
-### 6. 5M/10M 数据集写入时内存不足
+### 8. 5M/10M 数据集写入时内存不足
 
 大规模数据集写入 ES 时内存压力大。建议：
 - ES 节点至少 32GB 内存
 - 磁盘空间：5M 数据集约需 50-100GB，10M 约需 100-200GB
 
-### 7. `force_merge` 阶段特别慢
+### 9. `force_merge` 阶段特别慢
 
 这是正常的。ES 的段合并是 I/O 密集操作。如果只想快速看写入结果，可以临时跳过：
 
@@ -351,7 +459,7 @@ VDBBench 内置数据集存放在 S3 / AliyunOSS。如果在国内网络环境�
 
 但未经优化的索引搜索性能会明显偏差，正式测试时不建议跳过。
 
-### 8. 结果中 Recall 很低
+### 10. 结果中 Recall 很低
 
 - 如果是 Smoke 数据集：正常，因为是随机数据
 - 如果是正式数据集：检查 `num-candidates` 参数（调大通常能提升 Recall）、检查数据集是否完整下载
@@ -399,7 +507,7 @@ bash scripts/run_vdbbench_smoke.sh
 | Patch | 目标 | 作用 |
 |-------|------|------|
 | Patch A | `Elasticsearch.__init__` | 注入 `Accept` 兼容头，解决版本握手 |
-| Patch B | `ElasticCloudConfig.to_dict` | 替换 cloud-id 连接为 host + basic_auth |
+| Patch B | `ElasticCloudConfig.to_dict` | 替换 cloud-id 连接为 host + basic_auth，并统一注入 `verify_certs` / `ssl_show_warn` |
 | Patch C | `config.DATASET_LOCAL_DIR` | 允许自定义数据集存储目录 |
 | Patch D | `ElasticCloud.__init__` | 注入自定义索引名（`ES_INDEX_NAME`），确保 drop/create/search 均作用于指定索引 |
 

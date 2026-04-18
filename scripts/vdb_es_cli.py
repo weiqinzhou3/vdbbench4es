@@ -2,11 +2,17 @@ import os
 import sys
 from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
     print("Warning: python-dotenv not found, environment variables might not be loaded.")
+
+from scripts.es_connection_options import build_elasticsearch_options
 
 # --- 核心适配补丁开始 ---
 
@@ -30,14 +36,7 @@ try:
     from vectordb_bench.backend.clients.elastic_cloud.config import ElasticCloudConfig
     def patched_to_dict(self) -> dict:
         # 确保补丁内部也能拿到最新的环境变量
-        hosts = os.getenv("ES_HOSTS", "http://localhost:9200").split(",")
-        user = os.getenv("ES_USER", "elastic")
-        password = os.getenv("ES_PASSWORD", "")
-        verify_certs = os.getenv("ES_VERIFY_CERTS", "False").lower() == "true"
-        d = {"hosts": hosts, "verify_certs": verify_certs}
-        if user and password:
-            d["basic_auth"] = (user, password)
-        return d
+        return build_elasticsearch_options()
     ElasticCloudConfig.to_dict = patched_to_dict
 except ImportError:
     pass

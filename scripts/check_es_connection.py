@@ -2,6 +2,10 @@ import os
 import sys
 from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 try:
     from dotenv import load_dotenv
     load_dotenv(Path(__file__).parent.parent / ".env")
@@ -9,27 +13,15 @@ except ImportError:
     pass
 
 from elasticsearch import Elasticsearch
+from scripts.es_connection_options import build_elasticsearch_options
 
 def check_connection():
-    hosts = os.getenv("ES_HOSTS", "http://localhost:9200").split(",")
-    user = os.getenv("ES_USER", "elastic")
-    password = os.getenv("ES_PASSWORD", "")
-    verify_certs = os.getenv("ES_VERIFY_CERTS", "False").lower() == "true"
+    options = build_elasticsearch_options()
 
-    print(f"Connecting to ES hosts: {hosts} as user: {user}")
+    print(f"Connecting to ES hosts: {options['hosts']} as user: {os.getenv('ES_USER', 'elastic')}")
     
     try:
-        if user and password:
-            client = Elasticsearch(
-                hosts=hosts,
-                basic_auth=(user, password),
-                verify_certs=verify_certs
-            )
-        else:
-            client = Elasticsearch(
-                hosts=hosts,
-                verify_certs=verify_certs
-            )
+        client = Elasticsearch(**options)
         
         info = client.info()
         print("Successfully connected to Elasticsearch!")

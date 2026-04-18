@@ -8,6 +8,8 @@ from pydantic import SecretStr
 
 # Ensure project root is discoverable
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from vectordb_bench.backend.clients.elastic_cloud.config import ElasticCloudConfig, ElasticCloudIndexConfig, ESElementType
 from vectordb_bench.backend.clients import DB
@@ -17,6 +19,7 @@ from vectordb_bench.backend.task_runner import CaseRunner, RunningStatus
 from vectordb_bench.backend.data_source import DatasetSource
 from vectordb_bench.backend.clients.api import IndexType
 from vectordb_bench.backend.dataset import DatasetWithSizeType
+from scripts.es_connection_options import build_elasticsearch_options
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("vdbbench_builtin_verify")
@@ -24,14 +27,7 @@ logger = logging.getLogger("vdbbench_builtin_verify")
 def monkey_patch_elastic_config():
     def to_dict(self) -> dict:
         load_dotenv()
-        hosts = os.getenv("ES_HOSTS", "http://localhost:9200").split(",")
-        user = os.getenv("ES_USER", "elastic")
-        password = os.getenv("ES_PASSWORD", "")
-        verify_certs = os.getenv("ES_VERIFY_CERTS", "False").lower() == "true"
-        d = {"hosts": hosts, "verify_certs": verify_certs}
-        if user and password:
-            d["basic_auth"] = (user, password)
-        return d
+        return build_elasticsearch_options()
     ElasticCloudConfig.to_dict = to_dict
     logger.info("Monkey-patched ElasticCloudConfig.to_dict for self-hosted ES")
 

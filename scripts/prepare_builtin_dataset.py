@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import sys
 import time
@@ -6,10 +8,16 @@ from pathlib import Path
 
 # Ensure project root is discoverable
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-from vectordb_bench.backend.dataset import DatasetWithSizeType
-from vectordb_bench.backend.data_source import DatasetSource
 from dotenv import load_dotenv
+
+from scripts.offline_builtin_dataset import (
+    OfflineBuiltinDatasetMissingFiles,
+    offline_enabled,
+    verify_manager_local_dataset,
+)
 
 # 加载 .env
 load_dotenv()
@@ -34,15 +42,29 @@ def prepare_and_inspect(dataset_type: DatasetWithSizeType):
     
     start_time = time.time()
     try:
-        # Use AliyunOSS for faster download in CN
-        manager.prepare(DatasetSource.AliyunOSS)
-        duration = time.time() - start_time
-        logger.info(f"Prepare completed in {duration:.2f} seconds")
+        if offline_enabled():
+            verify_manager_local_dataset(dataset_type.name, manager)
+            duration = time.time() - start_time
+            logger.info(
+                "Offline verify completed in %.2f seconds for %s; dataset_dir=%s",
+                duration,
+                dataset_type.name,
+                manager.data_dir,
+            )
+        else:
+            from vectordb_bench.backend.data_source import DatasetSource
+
+            # Use AliyunOSS for faster download in CN
+            manager.prepare(DatasetSource.AliyunOSS)
+            duration = time.time() - start_time
+            logger.info(f"Prepare completed in {duration:.2f} seconds")
         
         # Inspection
         # In 1.0.20, directories are often structured as /tmp/vectordb_bench/dataset/<name>/<config>
         # Let's try to infer it from the manager or use standard VDBBench path
-        dataset_path = Path("/tmp/vectordb_bench/dataset")
+        from vectordb_bench import config
+
+        dataset_path = Path(config.DATASET_LOCAL_DIR)
         logger.info(f"Looking for dataset files in: {dataset_path}")
         
         # List all parquet files recursively to find where they landed
@@ -55,6 +77,9 @@ def prepare_and_inspect(dataset_type: DatasetWithSizeType):
         
         return True
         
+    except OfflineBuiltinDatasetMissingFiles as e:
+        logger.error(str(e))
+        return False
     except Exception as e:
         logger.error(f"Failed to prepare dataset {dataset_type.name}: {e}")
         import traceback
@@ -63,6 +88,7 @@ def prepare_and_inspect(dataset_type: DatasetWithSizeType):
 
 if __name__ == "__main__":
     load_dotenv()
+    from vectordb_bench.backend.dataset import DatasetWithSizeType
     
     # 优先从命令行获取，如果没有则从环境变量获取，最后给一个默认值
     if len(sys.argv) > 1:
@@ -71,11 +97,15 @@ if __name__ == "__main__":
         env_ds = os.getenv("PREPARE_DATASETS", "OpenAIMedium")
         ds_names = [ds.strip() for ds in env_ds.split(",")]
         
+    exit_code = 0
     for ds_name in ds_names:
         try:
             logger.info(f"Processing dataset: {ds_name}")
             ds_type = DatasetWithSizeType[ds_name]
-            prepare_and_inspect(ds_type)
+            if not prepare_and_inspect(ds_type):
+                exit_code = 1
         except KeyError:
             logger.error(f"Dataset {ds_name} not found in DatasetWithSizeType. Skip.")
-            continue
+            exit_code = 1
+
+    sys.exit(exit_code)

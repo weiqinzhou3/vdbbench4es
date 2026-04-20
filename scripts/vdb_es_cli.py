@@ -1,12 +1,19 @@
 import os
 import sys
+import logging
 from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
     print("Warning: python-dotenv not found, environment variables might not be loaded.")
+
+from scripts.offline_builtin_dataset import patch_offline_builtin_dataset_readers
 
 # --- 核心适配补丁开始 ---
 
@@ -63,6 +70,15 @@ try:
             kwargs.setdefault("indice", custom_index_name)
             original_ec_init(self, *args, **kwargs)
         ElasticCloud.__init__ = new_ec_init
+except ImportError:
+    pass
+
+# 补丁 E: built-in dataset 离线模式
+# VDB_OFFLINE=true 时，S3 / OSS reader 只检查本地 parquet 文件，不做远端
+# metadata 校验，也不触发下载。缺文件时抛出包含数据集目录和缺失文件名的错误。
+try:
+    if patch_offline_builtin_dataset_readers():
+        logging.getLogger(__name__).info("VDB_OFFLINE=true: built-in dataset offline mode enabled")
 except ImportError:
     pass
 

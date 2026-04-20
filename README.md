@@ -195,6 +195,37 @@ python3 scripts/vdb_es_cli.py elasticcloudhnsw \
 
 > **关于 `--cloud-id x --password x`**：这两个参数是占位符，仅用于通过 VDBBench CLI 的必填参数校验。真实的 ES 连接凭证来自 `.env` 文件，不是这里的 `x`。
 
+### Built-in dataset：在线 prepare 与离线运行
+
+VDBBench built-in dataset 有两种使用模式：
+
+1. **在线模式**：不设置 `VDB_OFFLINE` 或设置为 `false`。首次运行 `prepare_builtin_dataset.py` 时允许访问 AliyunOSS / S3，下载并校验内置数据集文件。
+2. **离线模式**：设置 `VDB_OFFLINE=true`。正式 benchmark 和 `prepare_builtin_dataset.py` 都只检查本地 parquet 文件，不访问 AliyunOSS / S3，也不做远端 metadata 校验。
+
+内网场景推荐流程：
+
+```bash
+# 1. 在有公网访问能力的机器上下载 built-in dataset
+export VDB_DATASET_DIR=/data/vdbbench_data
+python3 scripts/prepare_builtin_dataset.py OpenAIMedium
+
+# 2. 将整个数据目录拷贝到内网机器，例如 /data/vdbbench_data
+#    目录结构应保留为：
+#    /data/vdbbench_data/openai/openai_medium_500k/*.parquet
+
+# 3. 在内网机器上启用离线模式并先做本地校验
+export VDB_DATASET_DIR=/data/vdbbench_data
+export VDB_OFFLINE=true
+python3 scripts/prepare_builtin_dataset.py OpenAIMedium
+
+# 4. 校验通过后运行 benchmark
+python3 scripts/vdb_es_cli.py elasticcloudhnsw \
+  --case-type Performance1536D500K \
+  --cloud-id x --password x
+```
+
+离线模式下，如果文件齐全，日志会出现 `VDB_OFFLINE=true: using local built-in dataset files only`。如果文件缺失，程序会直接报错退出，错误信息包含 dataset 标识、当前数据集目录和缺失文件名列表，不会回退到联网下载。
+
 ## Elasticsearch 使用说明
 
 ### 连接参数
@@ -207,6 +238,7 @@ python3 scripts/vdb_es_cli.py elasticcloudhnsw \
 | `ES_VERIFY_CERTS` | 是否验证 TLS 证书 | `false` |
 | `ES_COMPAT_VERSION` | 客户端→服务端兼容版本号；9.x client 连 8.x server 时设为 `8`，版本一致时留空 | `8` |
 | `VDB_DATASET_DIR` | 数据集落盘目录（可选），默认 `/tmp/vectordb_bench/dataset` | `/data/vdbbench_data` |
+| `VDB_OFFLINE` | built-in dataset 离线开关；`true` 时只使用本地 parquet，不访问 S3 / OSS | `true` |
 | `ES_INDEX_NAME` | 自定义索引名（可选），默认 `vdb_bench_indice`；详见下方[自定义索引名](#自定义索引名es_index_name)一节 | `bench_openai_500k` |
 
 ### 索引类型子命令
@@ -335,13 +367,36 @@ VDBBench 内置数据集存放在 S3 / AliyunOSS。如果在国内网络环境�
 - `prepare_builtin_dataset.py` 默认使用 AliyunOSS 镜像，速度较快
 - 如果完全离线，可在有网的机器上先 `prepare`，再将数据目录打包搬运，并在目标机器上通过 `VDB_DATASET_DIR` 指定路径
 
-### 6. 5M/10M 数据集写入时内存不足
+### 6. 离线模式报 built-in dataset 缺文件
+
+确认当前生效的数据集根目录：
+
+```bash
+echo "$VDB_DATASET_DIR"
+```
+
+如果没有设置，默认根目录是 `/tmp/vectordb_bench/dataset`。built-in dataset 的实际文件目录会再拼接数据集名和规模，例如 OpenAI Medium 是：
+
+```bash
+$VDB_DATASET_DIR/openai/openai_medium_500k/
+```
+
+离线校验命令：
+
+```bash
+export VDB_OFFLINE=true
+python3 scripts/prepare_builtin_dataset.py OpenAIMedium
+```
+
+如果仍报缺文件，按错误信息中的 `missing_files=[...]` 补齐对应 parquet 文件。离线模式只检查本地路径，日志中出现 `VDB_OFFLINE=true` 且没有 `Start to downloading files`，即可判断程序没有进入 S3 / OSS 下载路径。
+
+### 7. 5M/10M 数据集写入时内存不足
 
 大规模数据集写入 ES 时内存压力大。建议：
 - ES 节点至少 32GB 内存
 - 磁盘空间：5M 数据集约需 50-100GB，10M 约需 100-200GB
 
-### 7. `force_merge` 阶段特别慢
+### 8. `force_merge` 阶段特别慢
 
 这是正常的。ES 的段合并是 I/O 密集操作。如果只想快速看写入结果，可以临时跳过：
 
@@ -351,7 +406,7 @@ VDBBench 内置数据集存放在 S3 / AliyunOSS。如果在国内网络环境�
 
 但未经优化的索引搜索性能会明显偏差，正式测试时不建议跳过。
 
-### 8. 结果中 Recall 很低
+### 9. 结果中 Recall 很低
 
 - 如果是 Smoke 数据集：正常，因为是随机数据
 - 如果是正式数据集：检查 `num-candidates` 参数（调大通常能提升 Recall）、检查数据集是否完整下载
@@ -402,6 +457,7 @@ bash scripts/run_vdbbench_smoke.sh
 | Patch B | `ElasticCloudConfig.to_dict` | 替换 cloud-id 连接为 host + basic_auth |
 | Patch C | `config.DATASET_LOCAL_DIR` | 允许自定义数据集存储目录 |
 | Patch D | `ElasticCloud.__init__` | 注入自定义索引名（`ES_INDEX_NAME`），确保 drop/create/search 均作用于指定索引 |
+| Patch E | `AwsS3Reader` / `AliyunOSSReader` | `VDB_OFFLINE=true` 时跳过远端校验和下载，只使用本地 built-in dataset 文件 |
 
 所有 patch 都是**运行时覆盖**，不修改 VDBBench 安装包的任何文件。
 
